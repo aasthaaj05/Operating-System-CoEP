@@ -1,0 +1,13 @@
+aastha@aastha-VirtualBox:~/xv6-public$ time make qemu
+qemu-system-i386 -serial mon:stdio -drive file=fs.img,index=1,media=disk,format=raw -drive file=xv6.img,index=0,media=disk,format=raw -smp 2 -m 512 
+xv6...
+cpu0: starting 0
+sb: size 1000 nblocks 941 ninodes 200 nlog 30 logstart 2 inodestart 32 bmap start 58
+init: starting sh
+$ usertests
+usertests starting
+already ran user tests -- rebuild fs.img
+$ 
+real	0m6.887s
+user	0m6.491s
+sys	0m0.545s

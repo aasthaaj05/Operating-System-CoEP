@@ -1,0 +1,6 @@
+$ ls -l | grep ".c" 
+ls: cannot open -l
+$ cat Makefile | grep CFLAGS
+$ echo "hello world" | grep hello
+"hello world"
+

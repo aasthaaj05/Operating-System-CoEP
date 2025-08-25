@@ -1,0 +1,7 @@
+1. Line 79 (CFLAGS =) : Defines the compiler flags used for building the kernel and user programs.
+2. Line 96 (dd if=kernel) : Copies the compiled kernel into the disk image using dd.
+3. Line 148 (_%:) : A pattern rule in Makefile that matches targets ending with _.
+4. Line 159 (mkfs) : Creates a new xv6 file system image with user programs.
+5. Line 224 (qemu) : Runs the xv6 operating system on QEMU emulator.
+
+

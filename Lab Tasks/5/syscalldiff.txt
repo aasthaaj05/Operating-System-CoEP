@@ -1,0 +1,7 @@
+1. File Descriptor Limits: In xv6, every process can open only a small fixed number of files (around 14, defined in param.h). On Linux, the limit is much higher and can even be changed with ulimit.
+
+
+2. Signals: xv6 doesn’t really have any system calls for handling signals. Linux, on the other hand, has kill, sigaction etc. for sending and handling signals.
+
+
+3. Process Info: xv6 doesn’t provide calls like getpid() or getuid(). Linux does have these, so a process can check its own ID, parent process ID, user ID etc.

@@ -1,0 +1,18 @@
+Also submit a TEXT file with details of the flow of the code, from the userland call to your syscall, until it lands in your syscall in kernel.
+Write like this:   
+f() in x.c -> g() in y.c ->  AA: in m.S -> BB: in t.S -> ff() in main.c  
+Fileaname: flow.txt 
+
+When the user program calls hello() (in hello.c)
+-> it uses the declaration in user.h so the compiler knows about it
+-> the call maps to the SYSCALL(hello) macro in usys.S
+-> which creates a small assembly stub that sets up the syscall number and triggers the ecall instruction
+-> the CPU switches to kernel mode and jumps to the trap handler in trap.c
+-> the trap handler identifies the syscall number in the a7 register
+-> then calls the syscall() function in syscall.c
+-> which looks up the syscall number in the syscalls array
+-> finds and calls the sys_hello() function in sysfile.c
+-> sys_hello() runs cprintf("hello\n") to print to the console
+-> returns 0 to the syscall handler
+-> the syscall handler returns control back to the user program
+-> and the user program continues running after the syscall
