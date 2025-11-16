@@ -1,0 +1,175 @@
+Slab allocator in xv6
+Implement a slob allocator in xv6 for allocating struct file.
+Rewrite all the relevant parts of the code.
+Submit a patch that is created with the master branch.
+
+
+
+
+
+diff --git a/Makefile b/Makefile
+index 09d790c..1e2678f 100644
+--- a/Makefile
++++ b/Makefile
+@@ -76,7 +76,7 @@ AS = $(TOOLPREFIX)gas
+ LD = $(TOOLPREFIX)ld
+ OBJCOPY = $(TOOLPREFIX)objcopy
+ OBJDUMP = $(TOOLPREFIX)objdump
+-CFLAGS = -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 -Werror -fno-omit-frame-pointer
++CFLAGS = -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 -Werror -Wno-infinite-recursion -Wno-infinite-recursion -Wno-infinite-recursion -fno-omit-frame-pointer -Wno-array-bounds
+ CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
+ ASFLAGS = -m32 -gdwarf-2 -Wa,-divide
+ # FreeBSD ld wants ``elf_i386_fbsd''
+@@ -157,7 +157,7 @@ _forktest: forktest.o $(ULIB)
+ 	$(OBJDUMP) -S _forktest > forktest.asm
+ 
+ mkfs: mkfs.c fs.h
+-	gcc -Werror -Wall -o mkfs mkfs.c
++	gcc -Werror -Wno-infinite-recursion -Wno-infinite-recursion -Wno-infinite-recursion -Wall -o mkfs mkfs.c
+ 
+ # Prevent deletion of intermediate files, e.g. cat.o, after first build, so
+ # that disk image changes after first build are persistent until clean.  More
+diff --git a/file.c b/file.c
+index 24b32c2..7322d01 100644
+--- a/file.c
++++ b/file.c
+@@ -10,16 +10,46 @@
+ #include "sleeplock.h"
+ #include "file.h"
+ 
++#define SLAB_SIZE 4096
++
++struct fileslab{
++	uint freecount;
++	uint bitmap[2];
++	struct fileslab *next;
++	struct fileslab *prev;
++	char padding[SLAB_SIZE- sizeof(uint)-2*sizeof(uint)-2*sizeof(struct fileslab*)-NFILE*sizeof(struct file)];
++	struct file files[NFILE];
++};
++
+ struct devsw devsw[NDEV];
+ struct {
+   struct spinlock lock;
+-  struct file file[NFILE];
++  struct fileslab *head;
+ } ftable;
+ 
++static struct fileslab*
++get_file_slab(void)
++{
++	struct fileslab *slab;
++	slab=(struct fileslab*)kalloc();
++	if(slab==0) return 0;
++	
++	slab->freecount=NFILE;
++	slab->bitmap[0]=0;
++	slab->bitmap[1]=0;
++	slab->next=slab;
++	slab->prev=slab;
++	
++	return slab;
++}
++
+ void
+ fileinit(void)
+ {
+   initlock(&ftable.lock, "ftable");
++  acquire(&ftable.lock);
++  ftable.head=get_file_slab();
++  release(&ftable.lock);
+ }
+ 
+ // Allocate a file structure.
+@@ -27,14 +57,35 @@ struct file*
+ filealloc(void)
+ {
+   struct file *f;
++  struct fileslab *slab;
++  int i, word, bit;
+ 
+   acquire(&ftable.lock);
+-  for(f = ftable.file; f < ftable.file + NFILE; f++){
+-    if(f->ref == 0){
+-      f->ref = 1;
+-      release(&ftable.lock);
+-      return f;
+-    }
++  slab=ftable.head;
++  if(slab->freecount==0){
++  	slab=get_file_slab();
++  	if(slab==0){
++  		release(&ftable.lock);
++  		return 0;
++  	}
++  	slab->next=ftable.head;
++  	slab->prev=ftable.head->prev;
++  	ftable.head->prev->next=slab;
++  	ftable.head->prev=slab;
++  	ftable.head=slab;
++  }
++  
++  for(i=0;i<NFILE;i++){
++  	word=i/32;
++  	bit=i%32;
++  	if((slab->bitmap[word] & (1<<bit))==0){
++  		slab->bitmap[word] |= (1<<bit);
++  		slab->freecount--;
++  		f=&slab->files[i];
++  		f->ref=1;
++  		release(&ftable.lock);
++		return f;
++  	}
+   }
+   release(&ftable.lock);
+   return 0;
+@@ -56,6 +107,8 @@ filedup(struct file *f)
+ void
+ fileclose(struct file *f)
+ {
++  struct fileslab *slab;
++  int index, word, bit;
+   struct file ff;
+ 
+   acquire(&ftable.lock);
+@@ -65,17 +118,33 @@ fileclose(struct file *f)
+     release(&ftable.lock);
+     return;
+   }
++  
+   ff = *f;
+-  f->ref = 0;
+-  f->type = FD_NONE;
++  f->type=FD_NONE;
++  
++  slab=(struct fileslab*)((uint)f & ~(SLAB_SIZE-1));
++  
++  index=f- slab->files;
++  word=index/32;
++  bit=index%32;
++  
++  slab->bitmap[word]&=~(1<<bit);
++  slab->freecount++;
++  
++  if(slab->freecount==NFILE&&(slab->next!=slab)){
++  	slab->prev->next=slab->next;
++  	slab->next->prev=slab->prev;
++  	if(ftable.head==slab) ftable.head=slab->next;
++  	kfree((char*)slab);
++  }
+   release(&ftable.lock);
+-
++  
+   if(ff.type == FD_PIPE)
+-    pipeclose(ff.pipe, ff.writable);
++  	pipeclose(ff.pipe, ff.writable);
+   else if(ff.type == FD_INODE){
+-    begin_op();
+-    iput(ff.ip);
+-    end_op();
++  	begin_op();
++  	iput(ff.ip);
++  	end_op();
+   }
+ }
+ 

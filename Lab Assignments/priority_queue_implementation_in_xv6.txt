@@ -1,0 +1,311 @@
+xv6 kernel comes with round robin scheduling.
+
+Implement priority scheduling in xv6.  This involves the following: (a) adding a priority field in the  struct proc; [0.5 marks] (b) adding a system call nice() to change priority of process. [1 marks] (c) making changes to necesary (which ones?) system calls to set priority of a process by default [0.5marks](d) changing the code of scheduler() to ensure that a process gets time quantum as per its priority [1.5 marks]e) learning how to deal with LAPIC (see lapicinit()) to set the proper timer value before scheduling a process. [1 marks] 
+
+Write testing code in usertests.c or otherwise if required, to test your code. The test code should do a statistical analysis of the throughput (what is this? learn from the textbook) of round robin against priority scheduling.  usertests should be to print the throughout as a number in the end. (e.g. throughput = 9.2/sec) [5 marks]
+
+
+aastha@aastha-VirtualBox:~/xv6-clean$ git diff
+diff --git a/Makefile b/Makefile
+index 09d790c..c3a41fb 100644
+--- a/Makefile
++++ b/Makefile
+@@ -76,7 +76,7 @@ AS = $(TOOLPREFIX)gas
+ LD = $(TOOLPREFIX)ld
+ OBJCOPY = $(TOOLPREFIX)objcopy
+ OBJDUMP = $(TOOLPREFIX)objdump
+-CFLAGS = -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 -Werror -fno-omit-frame-pointer
++CFLAGS = -fno-pic -static -fno-builtin -fno-strict-aliasing -O2 -Wall -MD -ggdb -m32 -fno-omit-frame-pointer
+ CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
+ ASFLAGS = -m32 -gdwarf-2 -Wa,-divide
+ # FreeBSD ld wants ``elf_i386_fbsd''
+@@ -181,6 +181,7 @@ UPROGS=\
+        _usertests\
+        _wc\
+        _zombie\
++       _prioritytest\
+ 
+ fs.img: mkfs README $(UPROGS)
+        ./mkfs fs.img README $(UPROGS)
+diff --git a/defs.h b/defs.h
+index 82fb982..118b081 100644
+--- a/defs.h
++++ b/defs.h
+@@ -80,6 +80,7 @@ void            lapiceoi(void);
+ void            lapicinit(void);
+ void            lapicstartap(uchar, uint);
+ void            microdelay(int);
++void            lapictimer(int);
+ 
+ // log.c
+ void            initlog(int dev);
+diff --git a/lapic.c b/lapic.c
+index b22bbd7..6e0904f 100644
+--- a/lapic.c
++++ b/lapic.c
+@@ -160,6 +160,16 @@ lapicstartap(uchar apicid, uint addr)
+   }
+ }
+ 
++void
++lapictimer(int us)
++{
++ if(!lapic) return;
++ 
++ // LAPIC timer frequency is roughly 100 ticks per microsecond
++ // this is approximate, real value depends on CPU
++ lapicw(TICR, us * 10);
++}
++
+ #define CMOS_STATA   0x0a
+ #define CMOS_STATB   0x0b
+ #define CMOS_UIP    (1 << 7)        // RTC update in progress
+diff --git a/proc.c b/proc.c
+index 806b1b1..df8a9ea 100644
+--- a/proc.c
++++ b/proc.c
+@@ -88,6 +88,8 @@ allocproc(void)
+ found:
+   p->state = EMBRYO;
+   p->pid = nextpid++;
++  p->priority=20;
++  p->runtime=0;
+ 
+   release(&ptable.lock);
+ 
+@@ -199,6 +201,8 @@ fork(void)
+   np->sz = curproc->sz;
+   np->parent = curproc;
+   *np->tf = *curproc->tf;
++  
++  np->priority=curproc->priority;
+ 
+   // Clear %eax so that fork returns 0 in the child.
+   np->tf->eax = 0;
+@@ -332,24 +336,42 @@ scheduler(void)
+ 
+     // Loop over process table looking for process to run.
+     acquire(&ptable.lock);
++    
++    struct proc *hp=0;
++    int best_prio=100;
+     for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
+       if(p->state != RUNNABLE)
+         continue;
++        
++      if(p->priority < best_prio){
++       best_prio=p->priority;
++       hp=p;
++      }
++     }
++     
++     if(hp==0){
++       release(&ptable.lock);
++       continue;
++     } 
++     
++     int quantum=20-(hp->priority/2);
++     if(quantum<1) quantum=1;
++     
++     lapictimer(quantum*100000);
+ 
+       // Switch to chosen process.  It is the process's job
+       // to release ptable.lock and then reacquire it
+       // before jumping back to us.
+-      c->proc = p;
+-      switchuvm(p);
+-      p->state = RUNNING;
++      c->proc = hp;
++      switchuvm(hp);
++      hp->state = RUNNING;
+ 
+-      swtch(&(c->scheduler), p->context);
++      swtch(&(c->scheduler), hp->context);
+       switchkvm();
+ 
+       // Process is done running for now.
+       // It should have changed its p->state before coming back.
+       c->proc = 0;
+-    }
+     release(&ptable.lock);
+ 
+   }
+diff --git a/proc.h b/proc.h
+index 1647114..de7f731 100644
+--- a/proc.h
++++ b/proc.h
+@@ -49,6 +49,8 @@ struct proc {
+   struct file *ofile[NOFILE];  // Open files
+   struct inode *cwd;           // Current directory
+   char name[16];               // Process name (debugging)
++  int priority;                       // 0 is high priority, 39 is low
++  uint runtime;                // to track how log process takes
+ };
+ 
+ // Process memory is laid out contiguously, low addresses first:
+diff --git a/syscall.c b/syscall.c
+index ee85261..ebc1780 100644
+--- a/syscall.c
++++ b/syscall.c
+@@ -103,6 +103,7 @@ extern int sys_unlink(void);
+ extern int sys_wait(void);
+ extern int sys_write(void);
+ extern int sys_uptime(void);
++extern int sys_nice(void);
+ 
+ static int (*syscalls[])(void) = {
+ [SYS_fork]    sys_fork,
+@@ -126,6 +127,7 @@ static int (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_nice]    sys_nice,
+ };
+ 
+ void
+diff --git a/syscall.h b/syscall.h
+index bc5f356..fc06372 100644
+--- a/syscall.h
++++ b/syscall.h
+@@ -20,3 +20,4 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_nice   22
+diff --git a/sysproc.c b/sysproc.c
+index 0686d29..c780c94 100644
+--- a/sysproc.c
++++ b/sysproc.c
+@@ -89,3 +89,18 @@ sys_uptime(void)
+   release(&tickslock);
+   return xticks;
+ }
++
++int
++sys_nice(void)
++{
++  int n;
++ 
++  if(argint(0, &n)<0) return -1;
++ 
++  //check if priority value is valid
++  if(n<0 || n>39) return -1;
++ 
++  struct proc *p=myproc();
++  p->priority=n;
++  return 0;
++}
+diff --git a/trap.c b/trap.c
+index 41c66eb..3d233aa 100644
+--- a/trap.c
++++ b/trap.c
+@@ -54,6 +54,7 @@ trap(struct trapframe *tf)
+       wakeup(&ticks);
+       release(&tickslock);
+     }
++    if(myproc()!=0 && myproc()->state==RUNNING) myproc()->runtime++;
+     lapiceoi();
+     break;
+   case T_IRQ0 + IRQ_IDE:
+diff --git a/user.h b/user.h
+index 4f99c52..acccabb 100644
+--- a/user.h
++++ b/user.h
+@@ -23,6 +23,7 @@ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++int nice(int);
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/usertests.c b/usertests.c
+index a1e97e7..b494ea6 100644
+--- a/usertests.c
++++ b/usertests.c
+@@ -1745,6 +1745,66 @@ rand()
+   return randstate;
+ }
+ 
++void
++test_throughput(void)
++{
++ int pids[5];
++ int i, j;
++ int starttime, endtime;
++ int work_done = 0;
++ 
++ printf(1, "Starting throughput test...\n");
++ 
++ starttime = uptime();
++ 
++ //5 processes with different priorities
++ for(i = 0; i < 5; i++){
++ int p = fork();
++ if(p < 0){
++ printf(1, "fork error\n");
++ exit();
++ }
++ 
++ if(p == 0){
++ // child process
++ int my_prio = i * 10; // priorities: 0, 10, 20, 30, 40
++ nice(my_prio);
++ 
++ // do some work
++ volatile int x = 0;
++ for(j = 0; j < 50; j++){
++ int k;
++ for(k = 0; k < 10000; k++){
++ x = x + k;
++ }
++ }
++ 
++ exit();
++ } else {
++ pids[i] = p;
++ }
++ }
++ 
++ // wait for all children
++ for(i = 0; i < 5; i++){
++ wait();
++ work_done += 50; // each child did 50 iterations
++ }
++ 
++ endtime = uptime();
++ 
++ int elapsed = endtime - starttime;
++ if(elapsed == 0) elapsed = 1; // avoid divide by zero
++ 
++ // calculate throughput
++ int tp = (work_done * 100) / elapsed;
++ 
++ printf(1, "Test completed\n");
++ printf(1, "Work done: %d iterations\n", work_done);
++ printf(1, "Time taken: %d ticks\n", elapsed);
++ printf(1, "throughput = %d.%d/sec\n", tp/100, tp%100);
++ }
++
+ int
+ main(int argc, char *argv[])
+ {
+@@ -1755,7 +1815,7 @@ main(int argc, char *argv[])
+     exit();
+   }
+   close(open("usertests.ran", O_CREATE));
+-
++  test_throughput();
+   argptest();
+   createdelete();
+   linkunlink();
+diff --git a/usys.S b/usys.S
+index 8bfd8a1..116326e 100644
+--- a/usys.S
++++ b/usys.S
+@@ -29,3 +29,4 @@ SYSCALL(getpid)
+ SYSCALL(sbrk)
+ SYSCALL(sleep)
+ SYSCALL(uptime)
++SYSCALL(nice)
+(END)

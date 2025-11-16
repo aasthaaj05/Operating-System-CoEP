@@ -1,0 +1,118 @@
+/*
+XV6 uses a very simple data structure to maintain the list of frames.
+
+The frames that are free are linked together using the first 4 bytes in the frames themselves.
+
+This is done in functions kinit1(), kinit2() and then later used in kalloc() and kfree().
+
+Replace this code to use some other data structure. For example - an array containing the list of free frames, a separate linked list containing the list of free frames, etc.
+*/
+
+diff --git a/kalloc.c b/kalloc.c
+index 14cd4f4..7da89bc 100644
+--- a/kalloc.c
++++ b/kalloc.c
+@@ -13,18 +13,18 @@ void freerange(void *vstart, void *vend);
+ extern char end[]; // first address after kernel loaded from ELF file
+                    // defined by the kernel linker script in kernel.ld
+ 
+-struct run {
+-  struct run *next;
+-};
++#define MAX_FRAMES (PHYSTOP/PGSIZE)   
++char *free_pages[MAX_FRAMES];  //array of free frame addresses
++int free_top=0;                //stack ptr
++
+ 
+ struct {
+   struct spinlock lock;
+   int use_lock;
+-  struct run *freelist;
+ } kmem;
+ 
+ // Initialization happens in two phases.
+-// 1. main() calls kinit1() while still using entrypgdir to place just
++// 1. main() calls kinit1() while still using entrypgdir to place just	
+ // the pages mapped by entrypgdir on free list.
+ // 2. main() calls kinit2() with the rest of the physical pages
+ // after installing a full page table that maps them on all cores.
+@@ -32,7 +32,7 @@ void
+ kinit1(void *vstart, void *vend)
+ {
+   initlock(&kmem.lock, "kmem");
+-  kmem.use_lock = 0;
++  kmem.use_lock=0;
+   freerange(vstart, vend);
+ }
+ 
+@@ -40,7 +40,7 @@ void
+ kinit2(void *vstart, void *vend)
+ {
+   freerange(vstart, vend);
+-  kmem.use_lock = 1;
++  kmem.use_lock=1;
+ }
+ 
+ void
+@@ -59,21 +59,22 @@ freerange(void *vstart, void *vend)
+ void
+ kfree(char *v)
+ {
+-  struct run *r;
+-
+-  if((uint)v % PGSIZE || v < end || V2P(v) >= PHYSTOP)
+-    panic("kfree");
+-
+-  // Fill with junk to catch dangling refs.
++  if((uint)v % PGSIZE || v<end || V2P(v) >= PHYSTOP)
++  	panic("kfree");
++  	
+   memset(v, 1, PGSIZE);
+-
+-  if(kmem.use_lock)
+-    acquire(&kmem.lock);
+-  r = (struct run*)v;
+-  r->next = kmem.freelist;
+-  kmem.freelist = r;
+-  if(kmem.use_lock)
+-    release(&kmem.lock);
++  
++  if(kmem.use_lock) 
++  	acquire(&kmem.lock);	
++  	
++  if(free_top < MAX_FRAMES){
++        free_pages[free_top++]=v;    
++   }else{
++        panic("free_pages overflow");
++        
++        if(kmem.use_lock) 
++        	release(&kmem.lock);
++   }
+ }
+ 
+ // Allocate one 4096-byte page of physical memory.
+@@ -82,15 +83,18 @@ kfree(char *v)
+ char*
+ kalloc(void)
+ {
+-  struct run *r;
++  char *r;
+ 
+   if(kmem.use_lock)
+     acquire(&kmem.lock);
+-  r = kmem.freelist;
+-  if(r)
+-    kmem.freelist = r->next;
++
++  if(free_top == 0)
++    r = 0;
++  else
++    r = free_pages[--free_top];
++
+   if(kmem.use_lock)
+     release(&kmem.lock);
+-  return (char*)r;
+-}
+ 
++  return r;
++}

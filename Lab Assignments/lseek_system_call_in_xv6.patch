@@ -1,0 +1,141 @@
+Note:  If you are not reasonably good with git concepts, you will end up submitting a bad patch file. Learn the "patch" and "diff" commands together to understand what "git diff"and "git apply" do. Your patch will be checked using a "git apply" by the instructor. 
+
+See this video on adding "hello world" system call to xv6.  https://coepac-my.sharepoint.com/:v:/g/personal/abhijit_comp_coep_ac_in/ERZfenCTOAlJo82XVRPo61kB4sM2YSyVAcoPgBTBlpG46g?e=ZNn6zW 
+
+Add the lseek() system call in XV6.
+
+/*
+No need to handle holes and offsets beyond file-size. Do not implement SEEK_HOLE and SEEK_DATA.
+
+The xv6 code that you need to read before: sys_open, sys_read, struct file, struct proc, argfd(), argint(), argptr(), etc. 
+
+Your program will be tested using a code that evaluator writes. The system call should be tested by you using your own application code, however you should not submit the application code.  How to do this, is your problem to solve.
+
+Submit a patch file using "git diff eeb7b415dbcb12cc362d0783e41c3d1f44066b17" that is the diff with the topmost commit in existing xv6 repo.
+
+The patch file should be named MIS.lseek.patch
+
+Additional instructions (added later) :
+
+Do not add a testing code in submission (of course you might have had it for your own purpose).  Your patch file should be applied using "git apply <filename>" on top of the existing xv6 repo. The patch should NOT include changes to Makefile.
+
+Note: Define Macros, Check all possible error cases and limits of file offset, take care of all file types.
+*/
+
+
+diff --git a/fcntl.h b/fcntl.h
+index d565483..f9109b4 100644
+--- a/fcntl.h
++++ b/fcntl.h
+@@ -2,3 +2,7 @@
+ #define O_WRONLY  0x001
+ #define O_RDWR    0x002
+ #define O_CREATE  0x200
++
++#define SEEK_SET 0
++#define SEEK_CUR 1
++#define SEEK_END 2
+diff --git a/syscall.c b/syscall.c
+index ee85261..c79fe8b 100644
+--- a/syscall.c
++++ b/syscall.c
+@@ -6,6 +6,7 @@
+ #include "proc.h"
+ #include "x86.h"
+ #include "syscall.h"
++#include "fcntl.h"
+ 
+ // User code makes a system call with INT T_SYSCALL.
+ // System call number in %eax.
+@@ -103,6 +104,7 @@ extern int sys_unlink(void);
+ extern int sys_wait(void);
+ extern int sys_write(void);
+ extern int sys_uptime(void);
++extern int sys_lseek(void);
+ 
+ static int (*syscalls[])(void) = {
+ [SYS_fork]    sys_fork,
+@@ -126,6 +128,7 @@ static int (*syscalls[])(void) = {
+ [SYS_link]    sys_link,
+ [SYS_mkdir]   sys_mkdir,
+ [SYS_close]   sys_close,
++[SYS_lseek]   sys_lseek,
+ };
+ 
+ void
+diff --git a/syscall.h b/syscall.h
+index bc5f356..93fbf00 100644
+--- a/syscall.h
++++ b/syscall.h
+@@ -20,3 +20,4 @@
+ #define SYS_link   19
+ #define SYS_mkdir  20
+ #define SYS_close  21
++#define SYS_lseek  22
+diff --git a/sysfile.c b/sysfile.c
+index bfe61b7..92c58c3 100644
+--- a/sysfile.c
++++ b/sysfile.c
+@@ -442,3 +442,40 @@ sys_pipe(void)
+   fd[1] = fd1;
+   return 0;
+ }
++
++int
++sys_lseek(void)
++{
++  int fd, offset, whence;
++  struct file *f;
++
++  if(argint(0, &fd) < 0 || argint(1, &offset) < 0 || argint(2, &whence) < 0)
++    return -1;
++  if(fd < 0 || fd >= NOFILE || (f = myproc()->ofile[fd]) == 0)
++    return -1;
++
++  // only allow seek on inode-backed files
++  if(f->type != FD_INODE && f->type != FD_DEVICE)
++    return -1;
++
++  int newoff;
++  switch(whence){
++  case SEEK_SET:
++    newoff = offset;
++    break;
++  case SEEK_CUR:
++    newoff = f->off + offset;
++    break;
++  case SEEK_END:
++    newoff = f->ip->size + offset;
++    break;
++  default:
++    return -1;
++  }
++
++  if(newoff < 0)
++    return -1;
++
++  f->off = newoff;
++  return f->off;
++}
+diff --git a/user.h b/user.h
+index 4f99c52..0d38129 100644
+--- a/user.h
++++ b/user.h
+@@ -23,6 +23,7 @@ int getpid(void);
+ char* sbrk(int);
+ int sleep(int);
+ int uptime(void);
++int lseek(int fd, int offset, int whence);
+ 
+ // ulib.c
+ int stat(const char*, struct stat*);
+diff --git a/usys.S b/usys.S
+index 8bfd8a1..6244300 100644
+--- a/usys.S
++++ b/usys.S
+@@ -29,3 +29,4 @@ SYSCALL(getpid)
+ SYSCALL(sbrk)
+ SYSCALL(sleep)
+ SYSCALL(uptime)
++SYSCALL(lseek)
+
