@@ -1,0 +1,8 @@
+Demonstrate the following using BASH Shell:
+Write a command that shows n'th line of a file
+Write a command that works on two files, containing MIS IDs in text. It finds MIS-IDs present in file1, but not in file2. 
+Write a command that finds all HREF links in a HTML file
+
+sed -n '5{p;q}' file1.txt
+grep -vxFf MIS2.txt MIS1.txt
+grep -oP '(?<=href=")[^"]*' index.html
